@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>웹 심박수 측정</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+    video { width: 300px; height: 200px; border-radius: 12px; }
+    #bpm { font-size: 24px; margin-top: 20px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h2>📸 카메라 기반 심박수 측정</h2>
+  <p>스마트폰 카메라에 손가락을 올려두세요</p>
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas" width="300" height="200" style="display:none;"></canvas>
+  <p id="bpm">심박수: ---</p>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const bpmText = document.getElementById("bpm");
+
+    let values = [];
+    let lastTime = Date.now();
+
+    // 카메라 실행
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+      .then(stream => video.srcObject = stream)
+      .catch(err => alert("카메라 접근 실패: " + err));
+
+    function analyzeFrame() {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      let frame = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+      // 밝기 평균 계산
+      let sum = 0;
+      for (let i = 0; i < frame.length; i += 4) {
+        sum += (frame[i] + frame[i+1] + frame[i+2]) / 3;
+      }
+      let brightness = sum / (frame.length / 4);
+
+      // 최근 데이터 저장
+      values.push({ t: Date.now(), v: brightness });
+      if (values.length > 300) values.shift(); // 최근 10초 정도만 보관
+
+      // 심박수 계산
+      if (values.length > 50) {
+        let peaks = 0;
+        for (let i = 1; i < values.length - 1; i++) {
+          if (values[i].v > values[i-1].v && values[i].v > values[i+1].v) {
+            peaks++;
+          }
+        }
+        // 분당 심박수 환산 (최근 10초 → 1분 환산)
+        let bpm = Math.round(peaks * (60000 / (values[values.length-1].t - values[0].t)));
+        if (bpm > 40 && bpm < 200) {
+          bpmText.innerText = "심박수: " + bpm + " BPM";
+        }
+      }
+
+      requestAnimationFrame(analyzeFrame);
+    }
+
+    analyzeFrame();
+  </script>
+</body>
+</html>
