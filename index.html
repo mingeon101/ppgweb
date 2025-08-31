@@ -2,62 +2,91 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>웹 심박수 측정</title>
+  <title>안정적인 웹 심박수 측정</title>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
-    video { width: 300px; height: 200px; border-radius: 12px; }
-    #bpm { font-size: 24px; margin-top: 20px; font-weight: bold; }
+    body { font-family: Arial, sans-serif; text-align: center; }
+    video { display:none; }
+    #bpm { font-size: 24px; margin-top: 10px; }
+    canvas { border:1px solid #ccc; margin-top:10px; }
   </style>
 </head>
 <body>
-  <h2>📸 카메라 기반 심박수 측정</h2>
-  <p>스마트폰 카메라에 손가락을 올려두세요</p>
+  <h2>📸 플래시 + 카메라 기반 심박수 측정</h2>
+  <p>📌 스마트폰 후면 카메라 + 플래시 켜고 손가락을 올려두세요</p>
   <video id="video" autoplay playsinline></video>
-  <canvas id="canvas" width="300" height="200" style="display:none;"></canvas>
+  <canvas id="graph" width="400" height="150"></canvas>
   <p id="bpm">심박수: ---</p>
 
   <script>
     const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
+    const canvasGraph = document.getElementById("graph");
+    const gctx = canvasGraph.getContext("2d");
     const bpmText = document.getElementById("bpm");
 
-    let values = [];
-    let lastTime = Date.now();
+    const buffer = [];
+    const timeWindow = 10000; // 최근 10초만 보관
 
-    // 카메라 실행
     navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
       .then(stream => video.srcObject = stream)
       .catch(err => alert("카메라 접근 실패: " + err));
 
-    function analyzeFrame() {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      let frame = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    function movingAverage(data, windowSize=5) {
+      return data.map((val, i, arr) => {
+        let start = Math.max(0, i - windowSize);
+        let end = Math.min(arr.length, i + windowSize);
+        let subset = arr.slice(start, end);
+        return subset.reduce((a, b) => a + b, 0) / subset.length;
+      });
+    }
 
-      // 밝기 평균 계산
+    function analyzeFrame() {
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = video.videoWidth;
+      tempCanvas.height = video.videoHeight;
+      const tctx = tempCanvas.getContext("2d");
+      tctx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+
+      const frame = tctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height).data;
+
+      // 🔴 R 채널 평균
       let sum = 0;
       for (let i = 0; i < frame.length; i += 4) {
-        sum += (frame[i] + frame[i+1] + frame[i+2]) / 3;
+        sum += frame[i]; // R만 사용
       }
-      let brightness = sum / (frame.length / 4);
+      let redAvg = sum / (frame.length / 4);
 
-      // 최근 데이터 저장
-      values.push({ t: Date.now(), v: brightness });
-      if (values.length > 300) values.shift(); // 최근 10초 정도만 보관
+      buffer.push({ t: Date.now(), v: redAvg });
+      // 최근 10초만 유지
+      while (buffer.length && buffer[0].t < Date.now() - timeWindow) buffer.shift();
 
-      // 심박수 계산
-      if (values.length > 50) {
+      if (buffer.length > 20) {
+        // smoothing
+        let smoothed = movingAverage(buffer.map(d => d.v), 5);
+
+        // 피크 검출
         let peaks = 0;
-        for (let i = 1; i < values.length - 1; i++) {
-          if (values[i].v > values[i-1].v && values[i].v > values[i+1].v) {
-            peaks++;
-          }
+        for (let i = 1; i < smoothed.length - 1; i++) {
+          if (smoothed[i] > smoothed[i-1] && smoothed[i] > smoothed[i+1]) peaks++;
         }
-        // 분당 심박수 환산 (최근 10초 → 1분 환산)
-        let bpm = Math.round(peaks * (60000 / (values[values.length-1].t - values[0].t)));
-        if (bpm > 40 && bpm < 200) {
+
+        let duration = (buffer[buffer.length-1].t - buffer[0].t) / 1000; // 초
+        let bpm = Math.round((peaks / duration) * 60);
+
+        if (bpm > 40 && bpm < 180) {
           bpmText.innerText = "심박수: " + bpm + " BPM";
         }
+
+        // 그래프 그리기
+        gctx.clearRect(0, 0, canvasGraph.width, canvasGraph.height);
+        gctx.beginPath();
+        smoothed.forEach((val, i) => {
+          let x = (i / smoothed.length) * canvasGraph.width;
+          let y = canvasGraph.height - ((val - Math.min(...smoothed)) / (Math.max(...smoothed) - Math.min(...smoothed))) * canvasGraph.height;
+          if (i === 0) gctx.moveTo(x, y);
+          else gctx.lineTo(x, y);
+        });
+        gctx.strokeStyle = "red";
+        gctx.stroke();
       }
 
       requestAnimationFrame(analyzeFrame);
